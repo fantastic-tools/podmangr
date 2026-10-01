@@ -1,0 +1,11 @@
+[package]
+name = "podmangr"
+version = "0.1.0"
+edition = "2024"
+description = "A TUI manager for local Podman containers"
+
+[dependencies]
+ratatui = "0.29"
+bollard = "0.18"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1"
