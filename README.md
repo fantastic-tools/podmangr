@@ -26,13 +26,14 @@ Override the socket with `XDG_RUNTIME_DIR`, or later a `PODMAN_SOCK` env (see ro
 | `x` | stop container |
 | `X` | remove (force) — asks **y/N** to confirm |
 | `Tab` | switch Containers ⇄ Pods |
+| `l` | logs (container) — scroll j/k, PgUp/PgDn, g/G; q/Esc back |
 | `r` | refresh |
 | `q` | quit |
 
 ## Status (MVP)
 - [x] List all containers (name / image / state / status), colour-coded state
 - [x] Start / stop / remove, refresh
-- [ ] Logs view (`l`)
+- [x] Logs view (`l`) — scrollable, last 1000 lines
 - [ ] Exec shell (`e`)
 - [ ] Live stats (cpu/mem)
 - [ ] Create dialog (image, name, ports, cpu/mem limits)

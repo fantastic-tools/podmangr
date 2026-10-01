@@ -5,8 +5,10 @@
 use anyhow::Result;
 use bollard::Docker;
 use bollard::container::{
-    ListContainersOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+    ListContainersOptions, LogOutput, LogsOptions, RemoveContainerOptions, StartContainerOptions,
+    StopContainerOptions,
 };
+use futures_util::stream::StreamExt;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState};
@@ -39,6 +41,13 @@ struct Pod {
     nctr: String,
 }
 
+struct LogView {
+    title: String,
+    lines: Vec<String>,
+    offset: usize,
+    max_off: usize,
+}
+
 struct App {
     docker: Docker,
     containers: Vec<Ctr>,
@@ -47,6 +56,7 @@ struct App {
     pstate: TableState,
     screen: Screen,
     confirm: Option<Pending>,
+    logs: Option<LogView>,
     msg: String,
     quit: bool,
 }
@@ -65,6 +75,7 @@ impl App {
             pstate,
             screen: Screen::Containers,
             confirm: None,
+            logs: None,
             msg: "loading…".into(),
             quit: false,
         }
@@ -134,6 +145,32 @@ impl App {
     }
     fn sel_pod(&self) -> Option<&Pod> {
         self.pstate.selected().and_then(|i| self.pods.get(i))
+    }
+
+    async fn fetch_logs(&self, id: &str) -> Vec<String> {
+        let opts = LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            tail: "1000".into(),
+            ..Default::default()
+        };
+        let mut stream = self.docker.logs(id, Some(opts));
+        let mut buf = String::new();
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(LogOutput::StdOut { message })
+                | Ok(LogOutput::StdErr { message })
+                | Ok(LogOutput::Console { message }) => {
+                    buf.push_str(&String::from_utf8_lossy(&message))
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    buf.push_str(&format!("\n[log error: {e}]"));
+                    break;
+                }
+            }
+        }
+        buf.lines().map(|l| l.to_string()).collect()
     }
 
     async fn perform(&mut self, act: Pending) {
@@ -225,6 +262,23 @@ async fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(
             continue;
         }
 
+        // Logs viewer intercepts keys (scroll) until closed.
+        if let Some(lv) = app.logs.as_mut() {
+            lv.offset = lv.offset.min(lv.max_off);
+            let page = 20usize;
+            match k.code {
+                KeyCode::Char('j') | KeyCode::Down => lv.offset = (lv.offset + 1).min(lv.max_off),
+                KeyCode::Char('k') | KeyCode::Up => lv.offset = lv.offset.saturating_sub(1),
+                KeyCode::PageDown => lv.offset = (lv.offset + page).min(lv.max_off),
+                KeyCode::PageUp => lv.offset = lv.offset.saturating_sub(page),
+                KeyCode::Char('g') => lv.offset = 0,
+                KeyCode::Char('G') => lv.offset = lv.max_off,
+                KeyCode::Char('q') | KeyCode::Esc => app.logs = None,
+                _ => {}
+            }
+            continue;
+        }
+
         // Confirm modal intercepts all keys until answered.
         if app.confirm.is_some() {
             match k.code {
@@ -257,6 +311,18 @@ async fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(
             KeyCode::Char('r') => {
                 app.msg = "refreshing…".into();
                 app.refresh().await;
+            }
+            KeyCode::Char('l') => {
+                if app.screen == Screen::Containers {
+                    if let Some(c) = app.sel_ctr() {
+                        let (id, title) = (c.id.clone(), c.name.clone());
+                        app.msg = format!("logs: {title}");
+                        let lines = app.fetch_logs(&id).await;
+                        app.logs = Some(LogView { title, lines, offset: usize::MAX, max_off: 0 });
+                    }
+                } else {
+                    app.msg = "logs: select a container (Tab)".into();
+                }
             }
             KeyCode::Char('s') => match app.screen {
                 Screen::Containers => {
@@ -311,6 +377,33 @@ async fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
+    // Full-screen logs viewer
+    if app.logs.is_some() {
+        let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
+        let lv = app.logs.as_mut().unwrap();
+        let inner_h = areas[0].height.saturating_sub(2) as usize;
+        lv.max_off = lv.lines.len().saturating_sub(inner_h);
+        let off = lv.offset.min(lv.max_off);
+        let visible: Vec<Line> = lv.lines[off..]
+            .iter()
+            .take(inner_h.max(1))
+            .map(|l| Line::raw(l.clone()))
+            .collect();
+        let title = format!(" logs: {}  ({}/{}) ", lv.title, off + visible.len(), lv.lines.len());
+        f.render_widget(
+            Paragraph::new(visible).block(Block::default().borders(Borders::ALL).title(title)),
+            areas[0],
+        );
+        let help = Line::from(vec![
+            Span::styled(" j/k", Style::new().cyan()), Span::raw(" scroll  "),
+            Span::styled("PgUp/PgDn", Style::new().cyan()), Span::raw(" page  "),
+            Span::styled("g/G", Style::new().cyan()), Span::raw(" top/bottom  "),
+            Span::styled("q/Esc", Style::new().cyan()), Span::raw(" back"),
+        ]);
+        f.render_widget(Paragraph::new(help), areas[1]);
+        return;
+    }
+
     let chunks = Layout::vertical([
         Constraint::Length(1), // tabs
         Constraint::Min(1),    // table
@@ -386,6 +479,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         Span::styled("s", Style::new().cyan()), Span::raw(" start  "),
         Span::styled("x", Style::new().cyan()), Span::raw(" stop  "),
         Span::styled("X", Style::new().cyan()), Span::raw(" rm  "),
+        Span::styled("l", Style::new().cyan()), Span::raw(" logs  "),
         Span::styled("r", Style::new().cyan()), Span::raw(" refresh  "),
         Span::styled("q", Style::new().cyan()), Span::raw(" quit   "),
         Span::styled(format!("[{}]", app.msg), Style::new().dim()),
