@@ -1,0 +1,24 @@
+# Who gets asked to review what. Later rules win, so the catch-all comes first.
+#
+# Two owners, because one is not enough to satisfy branch protection: GitHub
+# never lets a PR author approve their own PR, so with a single owner
+# "Require review from Code Owners" deadlocks every PR. @MrDClaudeBot is the
+# second owner and approves what @mrdoodles raises.
+#
+# A CODEOWNERS entry only counts if that account has **write** access to the
+# repository — an owner with read access is silently ignored and shows up in
+# the repo's CODEOWNERS errors, which is why write access is granted before
+# protection is turned on. Check with:
+#   gh api repos/mrdoodles/podmangr/codeowners/errors
+
+*                    @mrdoodles @MrDClaudeBot
+
+# Application source — the whole TUI (containers / pods / logs / create).
+/src/                @mrdoodles @MrDClaudeBot
+
+# Manifest + lockfile: dependency surface and reproducible builds.
+/Cargo.toml          @mrdoodles @MrDClaudeBot
+/Cargo.lock          @mrdoodles @MrDClaudeBot
+
+# CI / release workflows and this CODEOWNERS file itself.
+/.github/            @mrdoodles @MrDClaudeBot
