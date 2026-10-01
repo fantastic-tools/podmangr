@@ -26,9 +26,22 @@ Override the socket with `XDG_RUNTIME_DIR`, or later a `PODMAN_SOCK` env (see ro
 | `x` | stop container |
 | `X` | remove (force) — asks **y/N** to confirm |
 | `Tab` | switch Containers ⇄ Pods |
+| `n` | new container (form) |
 | `l` | logs (container) — scroll j/k, PgUp/PgDn, g/G; q/Esc back |
 | `r` | refresh |
 | `q` | quit |
+
+### Creating containers (`n`)
+Fill the form (Tab/↑↓ to move, space toggles Autostart, Enter submits):
+- **Plain run** when Autostart is off and Depends is empty → `podman run -d` with
+  `--memory/--cpus/-v/-p/--network` (and `--requires` if you name a container).
+- **Quadlet unit** when Autostart is on or Depends is set → writes
+  `~/.config/containers/systemd/<name>.container` (Memory/CPUs via PodmanArgs,
+  `Volume=`, `[Unit] After=/Requires=<dep>`, `[Install] WantedBy=default.target`),
+  then `systemctl --user daemon-reload` + start. This gives boot-autostart and
+  start-order dependencies. Depends expects a **systemd unit** (e.g. `dev-postgres.service`
+  or another quadlet's `name.service`).
+- **Disk**: use the Volume field (named volume) rather than a size cap (ext4 here).
 
 ## Status (MVP)
 - [x] List all containers (name / image / state / status), colour-coded state
@@ -36,7 +49,7 @@ Override the socket with `XDG_RUNTIME_DIR`, or later a `PODMAN_SOCK` env (see ro
 - [x] Logs view (`l`) — scrollable, last 1000 lines
 - [ ] Exec shell (`e`)
 - [ ] Live stats (cpu/mem)
-- [ ] Create dialog (image, name, ports, cpu/mem limits)
+- [x] Create dialog (`n`): image, name, network, ports, **cpu/mem limits**, **volume**, **autostart**, **depends-on**
 - [x] Pods screen (Tab) — start/stop/rm pods (via `podman` CLI)
 - [ ] Volumes / images / networks screens
 - [ ] Search/filter (`/`)
