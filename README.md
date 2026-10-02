@@ -1,64 +1,99 @@
 # podmangr
 
-A vim-keyed **TUI manager for local Podman containers** — because function keys mean two hands. 🙂
+A fast, **vim-keyed TUI for local Podman** — containers *and* pods — because function keys mean two hands. 🙂 Rust + [ratatui](https://ratatui.rs).
 
-Rust + [ratatui](https://ratatui.rs) talking to the rootless Podman socket
-(`$XDG_RUNTIME_DIR/podman/podman.sock`) via [bollard](https://crates.io/crates/bollard)
-(Podman's Docker-compatible API).
+- **Containers** via [bollard](https://crates.io/crates/bollard) over the rootless Podman socket (Podman speaks the Docker API).
+- **Pods** via the `podman` CLI (pods are Podman-specific — not in the Docker API).
+- Full lifecycle: **start / stop / remove**, **logs**, and a **create** form that can write a Quadlet unit for autostart + dependencies.
+
+## Why
+
+Other container TUIs lean on function keys or can't create with resource limits/dependencies. podmangr is one-handed vim keys, and its create form maps straight onto Podman's real features (`--memory/--cpus`, `--requires`, and Quadlet for boot-autostart).
+
+## Layout
+
+```
+ Containers | Pods                                        (Tab)
+┌ podmangr — containers ──────────────────────────────────────┐
+│   NAME                IMAGE                STATE    STATUS   │
+│ › dev-postgres_1      postgres:17          running  Up 3h    │
+│   penpot-frontend_1   penpotapp/frontend   running  Up 2h    │
+│   caddy               caddy:2.10           running  Up 2h    │
+└──────────────────────────────────────────────────────────────┘
+ j/k move · s start · x stop · X rm · l logs · n new · r refresh · q quit
+```
+
+`Tab` switches between the **Containers** and **Pods** screens; state is colour-coded (running = green, stopped/exited = red, paused = yellow).
 
 ## Build & run
-```bash
-cargo run              # dev
-cargo build --release  # ./target/release/podmangr
-```
-Requires the rootless Podman API socket (already enabled here):
-```bash
-systemctl --user enable --now podman.socket
-```
-Override the socket with `XDG_RUNTIME_DIR`, or later a `PODMAN_SOCK` env (see roadmap).
 
-## Keys (vim-style, one-handed)
+Requires a stable Rust toolchain and the rootless Podman **API socket**:
+
+```bash
+systemctl --user enable --now podman.socket     # one-time
+cargo run                                        # dev
+cargo build --release                            # ./target/release/podmangr
+```
+
+It connects to `$XDG_RUNTIME_DIR/podman/podman.sock`.
+
+## Keys
+
 | Key | Action |
 |-----|--------|
+| `Tab` | switch Containers ⇄ Pods |
 | `j` / `k` (or ↓/↑) | move selection |
 | `g` / `G` | first / last |
-| `s` | start container |
-| `x` | stop container |
-| `X` | remove (force) — asks **y/N** to confirm |
-| `Tab` | switch Containers ⇄ Pods |
+| `s` | start (container, or pod on the Pods screen) |
+| `x` | stop |
+| `X` | remove — asks **y / N** to confirm |
+| `l` | logs (container) |
 | `n` | new container (form) |
-| `l` | logs (container) — scroll j/k, PgUp/PgDn, g/G; q/Esc back |
 | `r` | refresh |
 | `q` | quit |
 
-### Creating containers (`n`)
-Fill the form (Tab/↑↓ to move, space toggles Autostart, Enter submits):
-- **Plain run** when Autostart is off and Depends is empty → `podman run -d` with
-  `--memory/--cpus/-v/-p/--network` (and `--requires` if you name a container).
-- **Quadlet unit** when Autostart is on or Depends is set → writes
-  `~/.config/containers/systemd/<name>.container` (Memory/CPUs via PodmanArgs,
-  `Volume=`, `[Unit] After=/Requires=<dep>`, `[Install] WantedBy=default.target`),
-  then `systemctl --user daemon-reload` + start. This gives boot-autostart and
-  start-order dependencies. Depends expects a **systemd unit** (e.g. `dev-postgres.service`
-  or another quadlet's `name.service`).
-- **Disk**: use the Volume field (named volume) rather than a size cap (ext4 here).
+**Logs viewer:** `j`/`k` scroll, `PgUp`/`PgDn` page, `g`/`G` top/bottom, `q`/`Esc` back.
+**Create form:** `Tab`/`↑↓` move fields, `space` toggles Autostart, `Enter` submits, `Esc` cancels.
 
-## Status (MVP)
-- [x] List all containers (name / image / state / status), colour-coded state
-- [x] Start / stop / remove, refresh
-- [x] Logs view (`l`) — scrollable, last 1000 lines
-- [ ] Exec shell (`e`)
-- [ ] Live stats (cpu/mem)
-- [x] Create dialog (`n`): image, name, network, ports, **cpu/mem limits**, **volume**, **autostart**, **depends-on**
-- [x] Pods screen (Tab) — start/stop/rm pods (via `podman` CLI)
+## Screens
+
+### Containers
+Lifecycle via the bollard API: `s` start, `x` stop, `X` remove (with a y/N confirm modal). `l` opens a scrollable log view (last ~1000 lines).
+
+### Pods
+Driven by the `podman` CLI (`podman pod ps/start/stop/rm`), since pods aren't part of the Docker API. `s`/`x`/`X` act on the selected pod.
+
+## Creating containers (`n`)
+
+Fill the form; behaviour depends on what you set:
+
+- **Plain `podman run -d`** — when *Autostart* is off and *Depends* is empty. Applies `--name`, `--network`, `-p` (ports), `--memory`, `--cpus`, `-v` (volume), and `--requires` if you name a container.
+- **Quadlet unit** — when *Autostart* is on **or** *Depends* is set. Writes `~/.config/containers/systemd/<name>.container` (limits via `PodmanArgs=`, `Volume=`, `[Unit] After=/Requires=<dep>`, `[Install] WantedBy=default.target`), then `systemctl --user daemon-reload` and starts it. This gives **boot-autostart** and **start-order dependencies**. *Depends* expects a systemd unit (e.g. `dev-postgres.service`, or another Quadlet's `<name>.service`).
+- **Disk** is handled with the Volume field (a named volume) rather than a hard size cap (not available on ext4).
+
+## What it touches (safety)
+
+- **Reads/controls** containers through the rootless Podman socket; **nothing is removed without a y/N confirm**.
+- **Pods** are managed by shelling out to `podman`.
+- **Create** either runs `podman run` or writes a Quadlet `.container` file under `~/.config/containers/systemd/` and starts the unit.
+- No daemon, no root — it's all rootless Podman as your user.
+
+## Roadmap
+
+- [x] Containers: list + start/stop/remove (+ confirm) + logs
+- [x] Pods screen (start/stop/rm)
+- [x] Create form (limits, volume, autostart, dependencies via run/Quadlet)
+- [ ] Exec shell into a container (`e`)
+- [ ] Live stats (CPU/mem)
 - [ ] Volumes / images / networks screens
-- [ ] Search/filter (`/`)
-- [x] Confirm dialog before destroy (y/N)
+- [ ] `/` filter & search
 
 ## Notes
-- Pods are Podman-specific (not in the Docker API), so the Pods screen uses the `podman` CLI; containers use the bollard API.
-- `ratatui::init()`/`restore()` install a panic hook that restores the terminal.
-- bollard is reached through `ratatui::crossterm` for terminal + events, so crossterm
-  versions always match ratatui's.
-- Pin dependencies / use `cargo install --locked` style discipline as this grows
-  (see ~/Documents/TechDocs/rust-tricks.odt).
+
+- `ratatui::init()`/`restore()` install a panic hook so the terminal is always restored.
+- crossterm is used via `ratatui::crossterm`, so its version always matches ratatui's.
+- Pin deps / prefer `cargo install --locked` as this grows (see `~/Documents/TechDocs/rust-tricks.odt`).
+
+## License
+
+See [LICENSE](LICENSE).
