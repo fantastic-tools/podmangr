@@ -92,6 +92,7 @@ struct App {
     logs: Option<LogView>,
     new_form: Option<NewForm>,
     msg: String,
+    theme: usize,
     quit: bool,
 }
 
@@ -112,6 +113,7 @@ impl App {
             logs: None,
             new_form: None,
             msg: "loading…".into(),
+            theme: load_theme(),
             quit: false,
         }
     }
@@ -517,6 +519,11 @@ async fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(
 
         match k.code {
             KeyCode::Char('q') => app.quit = true,
+            KeyCode::Char('t') => {
+                app.theme = (app.theme + 1) % themes().len();
+                save_theme(themes()[app.theme].name);
+                app.msg = format!("theme: {}", themes()[app.theme].name);
+            }
             KeyCode::Tab => {
                 app.screen = match app.screen {
                     Screen::Containers => Screen::Pods,
@@ -596,7 +603,48 @@ async fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(
     Ok(())
 }
 
+struct Theme {
+    name: &'static str,
+    fg: Color,
+    bg: Color,
+    accent: Color,
+    on: Color,
+    warn: Color,
+    danger: Color,
+    off: Color,
+}
+
+fn themes() -> Vec<Theme> {
+    vec![
+        Theme { name: "dark",      fg: Color::Gray,  bg: Color::Reset,                   accent: Color::Cyan,            on: Color::Green,          warn: Color::Yellow,        danger: Color::Red,            off: Color::DarkGray },
+        Theme { name: "light",     fg: Color::Black, bg: Color::White,                   accent: Color::Blue,            on: Color::Rgb(0,135,0),   warn: Color::Rgb(181,137,0), danger: Color::Rgb(197,15,31), off: Color::Gray },
+        Theme { name: "solarized", fg: Color::Rgb(131,148,150), bg: Color::Rgb(0,43,54), accent: Color::Rgb(38,139,210), on: Color::Rgb(133,153,0), warn: Color::Rgb(181,137,0), danger: Color::Rgb(220,50,47), off: Color::Rgb(88,110,117) },
+        Theme { name: "gruvbox",   fg: Color::Rgb(235,219,178), bg: Color::Rgb(40,40,40), accent: Color::Rgb(250,189,47), on: Color::Rgb(184,187,38), warn: Color::Rgb(254,128,25), danger: Color::Rgb(251,73,52), off: Color::Rgb(146,131,116) },
+    ]
+}
+
+fn config_theme_path() -> String {
+    format!("{}/.config/podmangr/theme", std::env::var("HOME").unwrap_or_default())
+}
+fn load_theme() -> usize {
+    std::fs::read_to_string(config_theme_path())
+        .ok()
+        .and_then(|s| { let n = s.trim().to_string(); themes().iter().position(|t| t.name == n) })
+        .unwrap_or(0)
+}
+fn save_theme(name: &str) {
+    let p = config_theme_path();
+    if let Some(dir) = std::path::Path::new(&p).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&p, name);
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
+    let th = &themes()[app.theme];
+    let base = Style::new().fg(th.fg).bg(th.bg);
+    f.render_widget(Block::default().style(base), f.area());
+
     // Full-screen logs viewer
     if app.logs.is_some() {
         let areas = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(f.area());
@@ -615,10 +663,10 @@ fn ui(f: &mut Frame, app: &mut App) {
             areas[0],
         );
         let help = Line::from(vec![
-            Span::styled(" j/k", Style::new().cyan()), Span::raw(" scroll  "),
-            Span::styled("PgUp/PgDn", Style::new().cyan()), Span::raw(" page  "),
-            Span::styled("g/G", Style::new().cyan()), Span::raw(" top/bottom  "),
-            Span::styled("q/Esc", Style::new().cyan()), Span::raw(" back"),
+            Span::styled(" j/k", Style::new().fg(th.accent)), Span::raw(" scroll  "),
+            Span::styled("PgUp/PgDn", Style::new().fg(th.accent)), Span::raw(" page  "),
+            Span::styled("g/G", Style::new().fg(th.accent)), Span::raw(" top/bottom  "),
+            Span::styled("q/Esc", Style::new().fg(th.accent)), Span::raw(" back"),
         ]);
         f.render_widget(Paragraph::new(help), areas[1]);
         return;
@@ -633,8 +681,8 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // tab bar
     let (ctab, ptab) = match app.screen {
-        Screen::Containers => (Style::new().reversed().bold(), Style::new().dim()),
-        Screen::Pods => (Style::new().dim(), Style::new().reversed().bold()),
+        Screen::Containers => (Style::new().bg(th.accent).fg(th.bg).bold(), Style::new().fg(th.off)),
+        Screen::Pods => (Style::new().fg(th.off), Style::new().bg(th.accent).fg(th.bg).bold()),
     };
     let tabs = Line::from(vec![
         Span::styled(" Containers ", ctab),
@@ -646,12 +694,12 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     match app.screen {
         Screen::Containers => {
-            let header = Row::new(["NAME", "IMAGE", "STATE", "STATUS"]).style(Style::new().bold());
+            let header = Row::new(["NAME", "IMAGE", "STATE", "STATUS"]).style(Style::new().fg(th.accent).bold());
             let rows = app.containers.iter().map(|c| {
                 Row::new(vec![
                     Cell::from(c.name.clone()),
                     Cell::from(c.image.clone()),
-                    Cell::from(c.state.clone()).style(state_style(&c.state)),
+                    Cell::from(c.state.clone()).style(state_style(th, &c.state)),
                     Cell::from(c.status.clone()),
                 ])
             });
@@ -664,17 +712,17 @@ fn ui(f: &mut Frame, app: &mut App) {
             let t = Table::new(rows, widths)
                 .header(header)
                 .block(Block::default().borders(Borders::ALL).title(" podmangr — containers "))
-                .row_highlight_style(Style::new().reversed())
+                .row_highlight_style(Style::new().bg(th.accent).fg(th.bg))
                 .highlight_symbol("› ");
             f.render_stateful_widget(t, chunks[1], &mut app.cstate);
         }
         Screen::Pods => {
-            let header = Row::new(["NAME", "ID", "STATUS", "#CTRS"]).style(Style::new().bold());
+            let header = Row::new(["NAME", "ID", "STATUS", "#CTRS"]).style(Style::new().fg(th.accent).bold());
             let rows = app.pods.iter().map(|p| {
                 Row::new(vec![
                     Cell::from(p.name.clone()),
                     Cell::from(short(&p.id).to_string()),
-                    Cell::from(p.status.clone()).style(state_style(&p.status.to_lowercase())),
+                    Cell::from(p.status.clone()).style(state_style(th, &p.status.to_lowercase())),
                     Cell::from(p.nctr.clone()),
                 ])
             });
@@ -687,23 +735,24 @@ fn ui(f: &mut Frame, app: &mut App) {
             let t = Table::new(rows, widths)
                 .header(header)
                 .block(Block::default().borders(Borders::ALL).title(" podmangr — pods "))
-                .row_highlight_style(Style::new().reversed())
+                .row_highlight_style(Style::new().bg(th.accent).fg(th.bg))
                 .highlight_symbol("› ");
             f.render_stateful_widget(t, chunks[1], &mut app.pstate);
         }
     }
 
     let help = Line::from(vec![
-        Span::styled(" Tab", Style::new().cyan()), Span::raw(" screen  "),
-        Span::styled("j/k", Style::new().cyan()), Span::raw(" move  "),
-        Span::styled("s", Style::new().cyan()), Span::raw(" start  "),
-        Span::styled("x", Style::new().cyan()), Span::raw(" stop  "),
-        Span::styled("X", Style::new().cyan()), Span::raw(" rm  "),
-        Span::styled("l", Style::new().cyan()), Span::raw(" logs  "),
-        Span::styled("n", Style::new().cyan()), Span::raw(" new  "),
-        Span::styled("r", Style::new().cyan()), Span::raw(" refresh  "),
-        Span::styled("q", Style::new().cyan()), Span::raw(" quit   "),
-        Span::styled(format!("[{}]", app.msg), Style::new().dim()),
+        Span::styled(" Tab", Style::new().fg(th.accent)), Span::raw(" screen  "),
+        Span::styled("j/k", Style::new().fg(th.accent)), Span::raw(" move  "),
+        Span::styled("s", Style::new().fg(th.accent)), Span::raw(" start  "),
+        Span::styled("x", Style::new().fg(th.accent)), Span::raw(" stop  "),
+        Span::styled("X", Style::new().fg(th.accent)), Span::raw(" rm  "),
+        Span::styled("l", Style::new().fg(th.accent)), Span::raw(" logs  "),
+        Span::styled("n", Style::new().fg(th.accent)), Span::raw(" new  "),
+        Span::styled("r", Style::new().fg(th.accent)), Span::raw(" refresh  "),
+        Span::styled("t", Style::new().fg(th.accent)), Span::raw(" theme  "),
+        Span::styled("q", Style::new().fg(th.accent)), Span::raw(" quit   "),
+        Span::styled(format!("[{}]", app.msg), Style::new().fg(th.off)),
     ]);
     f.render_widget(Paragraph::new(help), chunks[2]);
 
@@ -719,15 +768,15 @@ fn ui(f: &mut Frame, app: &mut App) {
             Line::raw(""),
             Line::from(vec![
                 Span::raw(format!("  Remove {what} ")),
-                Span::styled(label, Style::new().bold().yellow()),
+                Span::styled(label, Style::new().bold().fg(th.warn)),
                 Span::raw(" ?"),
             ]),
             Line::raw(""),
             Line::from(vec![
                 Span::raw("      "),
-                Span::styled("y", Style::new().green().bold()),
+                Span::styled("y", Style::new().fg(th.on).bold()),
                 Span::raw(" = yes    "),
-                Span::styled("n", Style::new().red().bold()),
+                Span::styled("n", Style::new().fg(th.danger).bold()),
                 Span::raw("/Esc = no"),
             ]),
         ])
@@ -735,7 +784,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" confirm remove ")
-                .border_style(Style::new().red()),
+                .border_style(Style::new().fg(th.danger)),
         );
         f.render_widget(body, area);
     }
@@ -754,43 +803,43 @@ fn ui(f: &mut Frame, app: &mut App) {
         let mut lines: Vec<Line> = vec![Line::raw("")];
         for i in 0..8 {
             let marker = if fm.focus == i { "› " } else { "  " };
-            let vstyle = if fm.focus == i { Style::new().reversed() } else { Style::new() };
+            let vstyle = if fm.focus == i { Style::new().bg(th.accent).fg(th.bg) } else { Style::new() };
             lines.push(Line::from(vec![
                 Span::raw(marker),
-                Span::styled(format!("{:<20}", labels[i]), Style::new().cyan()),
+                Span::styled(format!("{:<20}", labels[i]), Style::new().fg(th.accent)),
                 Span::styled(vals[i].clone(), vstyle),
             ]));
         }
         let m8 = if fm.focus == 8 { "› " } else { "  " };
         lines.push(Line::from(vec![
             Span::raw(m8),
-            Span::styled(format!("{:<20}", "Autostart (space)"), Style::new().cyan()),
+            Span::styled(format!("{:<20}", "Autostart (space)"), Style::new().fg(th.accent)),
             Span::raw(if fm.autostart { "[x]  → Quadlet systemd unit" } else { "[ ]" }),
         ]));
         lines.push(Line::raw(""));
         if !fm.err.is_empty() {
-            lines.push(Line::from(Span::styled(format!("  {}", fm.err), Style::new().red())));
+            lines.push(Line::from(Span::styled(format!("  {}", fm.err), Style::new().fg(th.danger))));
         }
         lines.push(Line::from(Span::styled(
             "  Enter submit · Tab/↑↓ move · space toggles autostart · Esc cancel",
-            Style::new().dim(),
+            Style::new().fg(th.off),
         )));
         f.render_widget(
             Paragraph::new(lines)
-                .block(Block::default().borders(Borders::ALL).title(" new container ").border_style(Style::new().green())),
+                .block(Block::default().borders(Borders::ALL).title(" new container ").border_style(Style::new().fg(th.accent))),
             area,
         );
     }
 }
 
-fn state_style(state: &str) -> Style {
+fn state_style(th: &Theme, state: &str) -> Style {
     match state {
-        s if s.contains("running") || s.contains("up") => Style::new().green(),
-        s if s.contains("paused") || s.contains("degraded") => Style::new().yellow(),
+        s if s.contains("running") || s.contains("up") => Style::new().fg(th.on),
+        s if s.contains("paused") || s.contains("degraded") => Style::new().fg(th.warn),
         s if s.contains("exited") || s.contains("stopped") || s.contains("created") || s.contains("dead") || s.contains("down") => {
-            Style::new().red()
+            Style::new().fg(th.danger)
         }
-        _ => Style::new(),
+        _ => Style::new().fg(th.fg),
     }
 }
 

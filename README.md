@@ -50,6 +50,7 @@ It connects to `$XDG_RUNTIME_DIR/podman/podman.sock`.
 | `l` | logs (container) |
 | `n` | new container (form) |
 | `r` | refresh |
+| `t` | cycle colour theme (dark / light / solarized / gruvbox) — saved |
 | `q` | quit |
 
 **Logs viewer:** `j`/`k` scroll, `PgUp`/`PgDn` page, `g`/`G` top/bottom, `q`/`Esc` back.
@@ -77,6 +78,10 @@ Fill the form; behaviour depends on what you set:
 - **Pods** are managed by shelling out to `podman`.
 - **Create** either runs `podman run` or writes a Quadlet `.container` file under `~/.config/containers/systemd/` and starts the unit.
 - No daemon, no root — it's all rootless Podman as your user.
+
+## Themes
+
+Four colour schemes — `dark`, `light`, `solarized`, `gruvbox` — cycle with `t`. Your choice is saved to `~/.config/podmangr/theme` and restored on next launch.
 
 ## Roadmap
 
